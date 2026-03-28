@@ -1,6 +1,10 @@
 import streamlit as st
 import pickle
 import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
 
 # ── Page Config ───────────────────────────────────
 st.set_page_config(
@@ -86,24 +90,51 @@ label, .stSelectbox label, .stNumberInput label {
 </style>
 """, unsafe_allow_html=True)
 
-# ── Load Model ────────────────────────────────────
+# ── Load / Train Model ────────────────────────────
 @st.cache_resource
 def load_model():
+    # Try loading pre-trained model first
     try:
         with open("model.pkl", "rb") as f:
             return pickle.load(f)
     except FileNotFoundError:
-        return None
+        pass  # Train from scratch using the CSV
+
+    # Train model from loan_data.csv (used on Streamlit Cloud)
+    df = pd.read_csv("loan_data.csv")
+    df.drop(columns=["Loan_ID"], inplace=True, errors="ignore")
+
+    for col in ["Gender", "Married", "Dependents", "Self_Employed", "Credit_History", "Loan_Amount_Term"]:
+        df[col] = df[col].fillna(df[col].mode()[0])
+    df["LoanAmount"] = df["LoanAmount"].fillna(df["LoanAmount"].median())
+
+    df["TotalIncome"]     = df["ApplicantIncome"] + df["CoapplicantIncome"]
+    df["LoanAmountLog"]   = np.log1p(df["LoanAmount"])
+    df["TotalIncomeLog"]  = np.log1p(df["TotalIncome"])
+
+    le = LabelEncoder()
+    for col in ["Gender", "Married", "Dependents", "Education", "Self_Employed", "Property_Area"]:
+        df[col] = le.fit_transform(df[col].astype(str))
+
+    feature_cols = [
+        "Gender", "Married", "Dependents", "Education", "Self_Employed",
+        "ApplicantIncome", "CoapplicantIncome", "LoanAmount",
+        "Loan_Amount_Term", "Credit_History", "Property_Area",
+        "TotalIncomeLog", "LoanAmountLog"
+    ]
+    X = df[feature_cols]
+    y = df["Loan_Status"] if "Loan_Status" in df.columns else df["Credit_History"].astype(int)
+
+    X_train, X_test, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=42)
+    model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
+    model.fit(X_train, y_train)
+    return model
 
 model = load_model()
 
 # ── Header ────────────────────────────────────────
 st.markdown("# 🏦 Loan Approval Predictor")
 st.markdown("<p style='text-align:center; color:#9090cc;'>Fill in applicant details to check loan eligibility</p>", unsafe_allow_html=True)
-
-if model is None:
-    st.error("⚠️ `model.pkl` not found. Please run `python model.py` first to train and save the model.")
-    st.stop()
 
 st.divider()
 
